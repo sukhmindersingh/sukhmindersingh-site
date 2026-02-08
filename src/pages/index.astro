@@ -1,131 +1,137 @@
 ---
-// Server Frontmatter: This runs at build time.
-const appTitle = "Client-Side Stat Engine";
+const siteTitle = "Sukhminder Singh | Webapps";
 ---
 
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-<link rel="icon" href="/favicon.ico" />
     <meta name="viewport" content="width=device-width" />
-<meta name="generator" content={Astro.generator} />
-    <title>{appTitle}</title>
+    <meta name="generator" content={Astro.generator} />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" href="/favicon.ico" />
+    <title>{siteTitle}</title>
   </head>
   <body>
-    <main class="wrapper">
-      <h1>{appTitle}</h1>
-      <p class="subtitle">Enter numbers separated by commas to compute statistics locally.</p>
+    <main class="page">
+      <header class="hero">
+        <p class="kicker">Personal Lab</p>
+        <h1>Sukhminder Singh</h1>
+        <p>
+          Interactive engineering webapps that run in the browser. Focus areas: mechanics,
+          numerical methods, and optimization.
+        </p>
+      </header>
 
-      <div class="card">
-        <label for="dataset">Input Dataset:</label>
-        <textarea id="dataset" rows="4" placeholder="e.g. 10.5, 20.1, 15, 30.2"></textarea>
-        
-        <div class="controls">
-          <button id="computeBtn">Compute Statistics</button>
-          <span id="status" class="status-ready">Ready</span>
-        </div>
-      </div>
-
-      <div id="results" class="card hidden">
-        <h2>Results</h2>
-        <div class="stat-grid">
-          <div class="stat-item">
-            <span class="label">Count (N)</span>
-            <span id="res-count" class="value">-</span>
-          </div>
-          <div class="stat-item">
-            <span class="label">Mean ($\mu$)</span>
-            <span id="res-mean" class="value">-</span>
-          </div>
-          <div class="stat-item">
-            <span class="label">Std Dev ($\sigma$)</span>
-            <span id="res-std" class="value">-</span>
-          </div>
-        </div>
-      </div>
+      <section class="apps" aria-label="Webapps">
+        <article class="app-card">
+          <h2>2D Topology Optimization</h2>
+          <p>
+            Density-based SIMP optimization for linear elasticity. Includes volume constraint,
+            filtering, and live convergence plot.
+          </p>
+          <a href="/apps/topopt">Open App</a>
+        </article>
+      </section>
     </main>
 
-    <script>
-      // 1. Select DOM elements
-      const btn = document.getElementById('computeBtn');
-      const input = document.getElementById('dataset') as HTMLTextAreaElement;
-      const resultsDiv = document.getElementById('results');
-      const statusSpan = document.getElementById('status');
-      
-      // Output fields
-      const outCount = document.getElementById('res-count');
-      const outMean = document.getElementById('res-mean');
-      const outStd = document.getElementById('res-std');
-
-      // 2. Define the Computation Function
-      function runAnalysis() {
-        if(!input || !resultsDiv) return;
-
-        // Reset UI
-        statusSpan.textContent = "Computing...";
-        
-        // Parse Input: Split by comma, map to Number, filter out NaNs
-        const rawString = input.value;
-        const data = rawString
-          .split(',')
-          .map(val => parseFloat(val.trim()))
-          .filter(val => !isNaN(val));
-
-        if (data.length === 0) {
-          statusSpan.textContent = "Error: No valid numbers found.";
-          return;
-        }
-
-        // --- THE MATH CORE (Runs in Browser) ---
-        
-        // Mean
-        const sum = data.reduce((a, b) => a + b, 0);
-        const mean = sum / data.length;
-
-        // Variance / Std Dev
-        const squareDiffs = data.map(val => Math.pow(val - mean, 2));
-        const avgSquareDiff = squareDiffs.reduce((a, b) => a + b, 0) / data.length;
-        const stdDev = Math.sqrt(avgSquareDiff);
-
-        // --- UPDATE UI ---
-        if(outCount) outCount.textContent = data.length.toString();
-        if(outMean) outMean.textContent = mean.toFixed(4); // 4 decimal places
-        if(outStd) outStd.textContent = stdDev.toFixed(4);
-
-        statusSpan.textContent = "Done";
-        resultsDiv.classList.remove('hidden');
-      }
-
-      // 3. Attach Event Listener
-      if (btn) {
-        btn.addEventListener('click', runAnalysis);
-      }
-    </script>
-
     <style>
-      :root { --primary: #2563eb; --bg: #f8fafc; --card: #ffffff; }
-      body { font-family: 'Segoe UI', sans-serif; background: var(--bg); color: #334155; display: flex; justify-content: center; padding-top: 50px; }
-      .wrapper { width: 100%; max-width: 500px; padding: 0 1rem; }
-      
-      h1 { font-size: 1.5rem; margin-bottom: 0.5rem; color: #0f172a; }
-      .subtitle { font-size: 0.9rem; color: #64748b; margin-bottom: 2rem; }
-      
-      .card { background: var(--card); padding: 1.5rem; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); margin-bottom: 1.5rem; border: 1px solid #e2e8f0; }
-      
-      textarea { width: 100%; padding: 0.75rem; border: 1px solid #cbd5e1; border-radius: 6px; margin-top: 0.5rem; font-family: monospace; box-sizing: border-box;}
-      
-      .controls { display: flex; align-items: center; justify-content: space-between; margin-top: 1rem; }
-      
-      button { background: var(--primary); color: white; border: none; padding: 0.75rem 1.5rem; border-radius: 6px; font-weight: 600; cursor: pointer; transition: background 0.2s; }
-      button:hover { background: #1d4ed8; }
-      
-      .stat-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 1rem; text-align: center; }
-      .stat-item { display: flex; flex-direction: column; }
-      .label { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.05em; color: #64748b; }
-      .value { font-size: 1.25rem; font-weight: bold; color: #0f172a; }
-      
-      .hidden { display: none; }
+      :root {
+        --bg: #f4f6f8;
+        --surface: #ffffff;
+        --ink: #0f172a;
+        --muted: #4b5563;
+        --accent: #0f766e;
+        --accent-strong: #115e59;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at 8% 8%, #d1fae5 0, rgba(209, 250, 229, 0) 42%),
+          radial-gradient(circle at 86% 14%, #ccfbf1 0, rgba(204, 251, 241, 0) 40%),
+          var(--bg);
+        color: var(--ink);
+      }
+
+      .page {
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 48px 20px 72px;
+      }
+
+      .hero {
+        padding: 30px;
+        background: var(--surface);
+        border-radius: 18px;
+        border: 1px solid #dbe3e8;
+        box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+      }
+
+      .kicker {
+        margin: 0;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--accent-strong);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      h1 {
+        margin: 10px 0 12px;
+        font-size: clamp(2rem, 5vw, 3.1rem);
+      }
+
+      .hero p {
+        margin: 0;
+        color: var(--muted);
+        max-width: 70ch;
+        line-height: 1.5;
+      }
+
+      .apps {
+        margin-top: 22px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 18px;
+      }
+
+      .app-card {
+        background: var(--surface);
+        border: 1px solid #dbe3e8;
+        border-radius: 14px;
+        padding: 20px;
+      }
+
+      .app-card h2 {
+        margin: 0 0 8px;
+        font-size: 1.3rem;
+      }
+
+      .app-card p {
+        margin: 0 0 14px;
+        color: var(--muted);
+        line-height: 1.45;
+      }
+
+      .app-card a {
+        display: inline-block;
+        text-decoration: none;
+        color: #fff;
+        background: var(--accent);
+        border-radius: 8px;
+        font-weight: 600;
+        padding: 10px 14px;
+      }
+
+      .app-card a:hover {
+        background: var(--accent-strong);
+      }
     </style>
   </body>
 </html>

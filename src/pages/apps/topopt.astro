@@ -1,0 +1,628 @@
+---
+const appTitle = "2D Topology Optimization (Client-Side)";
+---
+
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="generator" content={Astro.generator} />
+    <title>{appTitle}</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="icon" href="/favicon.ico" />
+  </head>
+  <body>
+    <main class="layout">
+      <header>
+        <a href="/" class="back">Back to Home</a>
+        <h1>{appTitle}</h1>
+        <p>
+          Density-based SIMP for 2D linear elasticity (cantilever load case). Entire solve runs in
+          your browser.
+        </p>
+      </header>
+
+      <section class="panel controls">
+        <div class="grid">
+          <label>
+            nelx
+            <input id="nelx" type="number" min="20" max="160" value="72" />
+          </label>
+          <label>
+            nely
+            <input id="nely" type="number" min="10" max="80" value="36" />
+          </label>
+          <label>
+            volfrac
+            <input id="volfrac" type="number" min="0.1" max="0.7" step="0.01" value="0.4" />
+          </label>
+          <label>
+            penal
+            <input id="penal" type="number" min="1" max="5" step="0.1" value="3.0" />
+          </label>
+          <label>
+            rmin
+            <input id="rmin" type="number" min="1" max="8" step="0.2" value="2.2" />
+          </label>
+          <label>
+            maxIter
+            <input id="maxIter" type="number" min="10" max="200" value="70" />
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="startBtn">Start / Restart</button>
+          <button id="pauseBtn" class="ghost">Pause</button>
+          <button id="presetBtn" class="ghost">Load Quick Preset</button>
+          <span id="status">Idle</span>
+        </div>
+      </section>
+
+      <section class="panel output">
+        <canvas id="densityCanvas" width="900" height="450" aria-label="Topology density field"></canvas>
+        <div class="metrics">
+          <div><strong>Iter:</strong> <span id="iterOut">0</span></div>
+          <div><strong>Compliance:</strong> <span id="compOut">-</span></div>
+          <div><strong>Vol:</strong> <span id="volOut">-</span></div>
+          <div><strong>Change:</strong> <span id="changeOut">-</span></div>
+        </div>
+      </section>
+    </main>
+
+    <script type="module">
+      const $ = (id) => document.getElementById(id);
+
+      const els = {
+        nelx: $("nelx"),
+        nely: $("nely"),
+        volfrac: $("volfrac"),
+        penal: $("penal"),
+        rmin: $("rmin"),
+        maxIter: $("maxIter"),
+        startBtn: $("startBtn"),
+        pauseBtn: $("pauseBtn"),
+        presetBtn: $("presetBtn"),
+        status: $("status"),
+        iterOut: $("iterOut"),
+        compOut: $("compOut"),
+        volOut: $("volOut"),
+        changeOut: $("changeOut"),
+        canvas: $("densityCanvas")
+      };
+
+      const ctx = els.canvas.getContext("2d");
+
+      const E0 = 1.0;
+      const Emin = 1e-9;
+      const nu = 0.3;
+
+      let runToken = 0;
+      let paused = false;
+
+      function lk() {
+        const k = [
+          0.5 - nu / 6,
+          0.125 + nu / 8,
+          -0.25 - nu / 12,
+          -0.125 + (3 * nu) / 8,
+          -0.25 + nu / 12,
+          -0.125 - nu / 8,
+          nu / 6,
+          0.125 - (3 * nu) / 8
+        ];
+
+        const raw = [
+          [k[0], k[1], k[2], k[3], k[4], k[5], k[6], k[7]],
+          [k[1], k[0], k[7], k[6], k[5], k[4], k[3], k[2]],
+          [k[2], k[7], k[0], k[5], k[6], k[3], k[4], k[1]],
+          [k[3], k[6], k[5], k[0], k[7], k[2], k[1], k[4]],
+          [k[4], k[5], k[6], k[7], k[0], k[1], k[2], k[3]],
+          [k[5], k[4], k[3], k[2], k[1], k[0], k[7], k[6]],
+          [k[6], k[3], k[4], k[1], k[2], k[7], k[0], k[5]],
+          [k[7], k[2], k[1], k[4], k[3], k[6], k[5], k[0]]
+        ];
+
+        const scale = 1 / (1 - nu * nu);
+        for (let i = 0; i < 8; i += 1) {
+          for (let j = 0; j < 8; j += 1) {
+            raw[i][j] *= scale;
+          }
+        }
+        return raw;
+      }
+
+      const KE = lk();
+
+      function buildModel(nelx, nely, volfrac) {
+        const nele = nelx * nely;
+        const nn = (nelx + 1) * (nely + 1);
+        const ndof = nn * 2;
+
+        const x = new Float64Array(nele);
+        x.fill(volfrac);
+
+        const edofMat = new Array(nele);
+        for (let ex = 0; ex < nelx; ex += 1) {
+          for (let ey = 0; ey < nely; ey += 1) {
+            const e = ex * nely + ey;
+            const n1 = ex * (nely + 1) + ey;
+            const n2 = (ex + 1) * (nely + 1) + ey;
+            edofMat[e] = [
+              2 * n1,
+              2 * n1 + 1,
+              2 * n2,
+              2 * n2 + 1,
+              2 * n2 + 2,
+              2 * n2 + 3,
+              2 * n1 + 2,
+              2 * n1 + 3
+            ];
+          }
+        }
+
+        const fixed = new Uint8Array(ndof);
+        for (let ey = 0; ey <= nely; ey += 1) {
+          const node = ey;
+          fixed[2 * node] = 1;
+          fixed[2 * node + 1] = 1;
+        }
+
+        const freeDofs = [];
+        for (let d = 0; d < ndof; d += 1) {
+          if (!fixed[d]) freeDofs.push(d);
+        }
+
+        const f = new Float64Array(ndof);
+        const loadNode = nelx * (nely + 1) + Math.floor(nely / 2);
+        f[2 * loadNode + 1] = -1;
+
+        return { nele, ndof, x, edofMat, freeDofs, f };
+      }
+
+      function buildFilter(nelx, nely, rmin) {
+        const nele = nelx * nely;
+        const neighbors = Array.from({ length: nele }, () => []);
+        const hsum = new Float64Array(nele);
+
+        const r = Math.floor(rmin);
+        for (let ex = 0; ex < nelx; ex += 1) {
+          for (let ey = 0; ey < nely; ey += 1) {
+            const e1 = ex * nely + ey;
+            const minX = Math.max(ex - r, 0);
+            const maxX = Math.min(ex + r, nelx - 1);
+            const minY = Math.max(ey - r, 0);
+            const maxY = Math.min(ey + r, nely - 1);
+
+            for (let i = minX; i <= maxX; i += 1) {
+              for (let j = minY; j <= maxY; j += 1) {
+                const dist = Math.sqrt((ex - i) ** 2 + (ey - j) ** 2);
+                const w = Math.max(0, rmin - dist);
+                if (w <= 0) continue;
+                const e2 = i * nely + j;
+                neighbors[e1].push([e2, w]);
+                hsum[e1] += w;
+              }
+            }
+          }
+        }
+
+        return { neighbors, hsum };
+      }
+
+      function matVec(model, xPhys, penal, pFree, outFree) {
+        const { ndof, edofMat, freeDofs } = model;
+        const fullP = new Float64Array(ndof);
+        const fullY = new Float64Array(ndof);
+
+        for (let i = 0; i < freeDofs.length; i += 1) {
+          fullP[freeDofs[i]] = pFree[i];
+          outFree[i] = 0;
+        }
+
+        for (let e = 0; e < edofMat.length; e += 1) {
+          const edofs = edofMat[e];
+          const xe = Emin + (E0 - Emin) * xPhys[e] ** penal;
+
+          for (let i = 0; i < 8; i += 1) {
+            const row = edofs[i];
+            let acc = 0;
+            for (let j = 0; j < 8; j += 1) {
+              acc += KE[i][j] * fullP[edofs[j]];
+            }
+            fullY[row] += xe * acc;
+          }
+        }
+
+        for (let i = 0; i < freeDofs.length; i += 1) {
+          const dof = freeDofs[i];
+          outFree[i] = fullY[dof];
+        }
+      }
+
+      function computeDiagonal(model, xPhys, penal) {
+        const diagFull = new Float64Array(model.ndof);
+        for (let e = 0; e < model.edofMat.length; e += 1) {
+          const edofs = model.edofMat[e];
+          const xe = Emin + (E0 - Emin) * xPhys[e] ** penal;
+          for (let i = 0; i < 8; i += 1) {
+            diagFull[edofs[i]] += xe * KE[i][i];
+          }
+        }
+
+        const diagFree = new Float64Array(model.freeDofs.length);
+        for (let i = 0; i < model.freeDofs.length; i += 1) {
+          diagFree[i] = Math.max(1e-9, diagFull[model.freeDofs[i]]);
+        }
+        return diagFree;
+      }
+
+      function solveCG(model, xPhys, penal, tol = 1e-8, maxIter = 260) {
+        const { freeDofs, f } = model;
+        const n = freeDofs.length;
+
+        const uFree = new Float64Array(n);
+        const r = new Float64Array(n);
+        const z = new Float64Array(n);
+        const p = new Float64Array(n);
+        const Ap = new Float64Array(n);
+        const diag = computeDiagonal(model, xPhys, penal);
+
+        for (let i = 0; i < n; i += 1) {
+          r[i] = f[freeDofs[i]];
+          z[i] = r[i] / diag[i];
+          p[i] = z[i];
+        }
+
+        let rzOld = 0;
+        for (let i = 0; i < n; i += 1) rzOld += r[i] * z[i];
+
+        for (let it = 0; it < maxIter; it += 1) {
+          matVec(model, xPhys, penal, p, Ap);
+
+          let pAp = 0;
+          for (let i = 0; i < n; i += 1) pAp += p[i] * Ap[i];
+          if (Math.abs(pAp) < 1e-20) break;
+
+          const alpha = rzOld / pAp;
+          for (let i = 0; i < n; i += 1) {
+            uFree[i] += alpha * p[i];
+            r[i] -= alpha * Ap[i];
+          }
+
+          let normR = 0;
+          for (let i = 0; i < n; i += 1) normR += r[i] * r[i];
+          if (Math.sqrt(normR) < tol) break;
+
+          for (let i = 0; i < n; i += 1) {
+            z[i] = r[i] / Math.max(1e-9, diag[i]);
+          }
+
+          let rzNew = 0;
+          for (let i = 0; i < n; i += 1) rzNew += r[i] * z[i];
+          const beta = rzNew / Math.max(1e-20, rzOld);
+          for (let i = 0; i < n; i += 1) {
+            p[i] = z[i] + beta * p[i];
+          }
+          rzOld = rzNew;
+        }
+
+        const u = new Float64Array(model.ndof);
+        for (let i = 0; i < n; i += 1) {
+          u[freeDofs[i]] = uFree[i];
+        }
+        return u;
+      }
+
+      function computeCompliance(model, xPhys, penal, u, dc, dv) {
+        let c = 0;
+
+        for (let e = 0; e < model.nele; e += 1) {
+          const edofs = model.edofMat[e];
+          const ue = new Float64Array(8);
+          for (let i = 0; i < 8; i += 1) ue[i] = u[edofs[i]];
+
+          let ce = 0;
+          for (let i = 0; i < 8; i += 1) {
+            let ku = 0;
+            for (let j = 0; j < 8; j += 1) ku += KE[i][j] * ue[j];
+            ce += ue[i] * ku;
+          }
+
+          const xpe = xPhys[e] ** penal;
+          c += (Emin + (E0 - Emin) * xpe) * ce;
+          dc[e] = -penal * (E0 - Emin) * xPhys[e] ** (penal - 1) * ce;
+          dv[e] = 1;
+        }
+
+        return c;
+      }
+
+      function filterSensitivities(x, dc, dv, filter) {
+        const { neighbors, hsum } = filter;
+        const dcf = new Float64Array(dc.length);
+        const dvf = new Float64Array(dv.length);
+
+        for (let e = 0; e < dc.length; e += 1) {
+          let sumDC = 0;
+          let sumDV = 0;
+          for (const [j, w] of neighbors[e]) {
+            sumDC += w * x[j] * dc[j];
+            sumDV += w * dv[j];
+          }
+          dcf[e] = sumDC / Math.max(1e-9, x[e] * hsum[e]);
+          dvf[e] = sumDV / Math.max(1e-9, hsum[e]);
+        }
+
+        return { dcf, dvf };
+      }
+
+      function ocUpdate(x, volfrac, dcf, dvf) {
+        const move = 0.2;
+        let l1 = 0;
+        let l2 = 1e9;
+        const xNew = new Float64Array(x.length);
+
+        while ((l2 - l1) / Math.max(1, l2 + l1) > 1e-4) {
+          const lmid = 0.5 * (l1 + l2);
+          let vol = 0;
+
+          for (let i = 0; i < x.length; i += 1) {
+            const candidate = x[i] * Math.sqrt(Math.max(0, -dcf[i] / (dvf[i] * lmid)));
+            const lo = Math.max(0.001, x[i] - move);
+            const hi = Math.min(1, x[i] + move);
+            xNew[i] = Math.min(hi, Math.max(lo, candidate));
+            vol += xNew[i];
+          }
+
+          if (vol / x.length > volfrac) l1 = lmid;
+          else l2 = lmid;
+        }
+
+        return xNew;
+      }
+
+      function drawDensity(canvas, context, x, nelx, nely) {
+        const w = canvas.width;
+        const h = canvas.height;
+        const cw = w / nelx;
+        const ch = h / nely;
+        context.clearRect(0, 0, w, h);
+
+        for (let ex = 0; ex < nelx; ex += 1) {
+          for (let ey = 0; ey < nely; ey += 1) {
+            const e = ex * nely + ey;
+            const rho = x[e];
+            const g = Math.round((1 - rho) * 255);
+            context.fillStyle = `rgb(${g},${g},${g})`;
+            context.fillRect(ex * cw, h - (ey + 1) * ch, Math.ceil(cw), Math.ceil(ch));
+          }
+        }
+      }
+
+      async function runOptimization() {
+        const token = ++runToken;
+        paused = false;
+
+        const nelx = Number(els.nelx.value);
+        const nely = Number(els.nely.value);
+        const volfrac = Number(els.volfrac.value);
+        const penal = Number(els.penal.value);
+        const rmin = Number(els.rmin.value);
+        const maxIter = Number(els.maxIter.value);
+
+        if (!Number.isFinite(nelx) || !Number.isFinite(nely) || nelx < 2 || nely < 2) {
+          els.status.textContent = "Invalid mesh settings";
+          return;
+        }
+
+        els.status.textContent = "Building model...";
+        const model = buildModel(nelx, nely, volfrac);
+        const filter = buildFilter(nelx, nely, rmin);
+        let x = model.x;
+
+        drawDensity(els.canvas, ctx, x, nelx, nely);
+
+        for (let it = 1; it <= maxIter; it += 1) {
+          if (token !== runToken) return;
+          while (paused) {
+            if (token !== runToken) return;
+            await new Promise((r) => setTimeout(r, 80));
+          }
+
+          els.status.textContent = `Iter ${it}/${maxIter}: solving FE...`;
+          const u = solveCG(model, x, penal);
+
+          const dc = new Float64Array(model.nele);
+          const dv = new Float64Array(model.nele);
+          const c = computeCompliance(model, x, penal, u, dc, dv);
+          const { dcf, dvf } = filterSensitivities(x, dc, dv, filter);
+          const xOld = x;
+          x = ocUpdate(x, volfrac, dcf, dvf);
+
+          let change = 0;
+          let vol = 0;
+          for (let i = 0; i < x.length; i += 1) {
+            change = Math.max(change, Math.abs(x[i] - xOld[i]));
+            vol += x[i];
+          }
+          vol /= x.length;
+
+          drawDensity(els.canvas, ctx, x, nelx, nely);
+          els.iterOut.textContent = String(it);
+          els.compOut.textContent = c.toFixed(3);
+          els.volOut.textContent = vol.toFixed(3);
+          els.changeOut.textContent = change.toFixed(4);
+          els.status.textContent = `Running (${it}/${maxIter})`;
+
+          await new Promise((r) => requestAnimationFrame(r));
+          if (change < 0.005 && it > 10) {
+            els.status.textContent = `Converged at iteration ${it}`;
+            return;
+          }
+        }
+
+        els.status.textContent = "Completed max iterations";
+      }
+
+      els.startBtn.addEventListener("click", () => {
+        runOptimization();
+      });
+
+      els.pauseBtn.addEventListener("click", () => {
+        paused = !paused;
+        els.pauseBtn.textContent = paused ? "Resume" : "Pause";
+        if (!paused) els.status.textContent = "Running...";
+      });
+
+      els.presetBtn.addEventListener("click", () => {
+        els.nelx.value = "64";
+        els.nely.value = "30";
+        els.volfrac.value = "0.40";
+        els.penal.value = "3.0";
+        els.rmin.value = "2.0";
+        els.maxIter.value = "60";
+        els.status.textContent = "Preset loaded";
+      });
+
+      drawDensity(els.canvas, ctx, new Float64Array(72 * 36).fill(0.4), 72, 36);
+    </script>
+
+    <style>
+      :root {
+        --bg: #f4f6f8;
+        --surface: #ffffff;
+        --ink: #111827;
+        --muted: #4b5563;
+        --accent: #0f766e;
+        --border: #d7dee4;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(circle at 16% 8%, #d1fae5 0, rgba(209, 250, 229, 0) 38%),
+          radial-gradient(circle at 80% 12%, #bae6fd 0, rgba(186, 230, 253, 0) 35%),
+          var(--bg);
+        color: var(--ink);
+        font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+      }
+
+      .layout {
+        max-width: 1120px;
+        margin: 0 auto;
+        padding: 28px 18px 40px;
+      }
+
+      header {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 20px;
+        margin-bottom: 14px;
+      }
+
+      .back {
+        display: inline-block;
+        font-size: 0.9rem;
+        margin-bottom: 10px;
+        color: var(--accent);
+        text-decoration: none;
+        font-weight: 600;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.6rem, 3vw, 2.2rem);
+      }
+
+      header p {
+        margin: 8px 0 0;
+        color: var(--muted);
+      }
+
+      .panel {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 16px;
+        margin-bottom: 14px;
+      }
+
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+        gap: 10px;
+      }
+
+      label {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+
+      input {
+        border: 1px solid #c7d2da;
+        border-radius: 8px;
+        padding: 9px 10px;
+        font-size: 0.95rem;
+      }
+
+      .actions {
+        margin-top: 14px;
+        display: flex;
+        gap: 10px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      button {
+        border: 0;
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-weight: 600;
+        cursor: pointer;
+        background: var(--accent);
+        color: #fff;
+      }
+
+      button.ghost {
+        background: #edf5f4;
+        color: #0f4a45;
+        border: 1px solid #cfe7e3;
+      }
+
+      #status {
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      canvas {
+        width: 100%;
+        height: auto;
+        border-radius: 10px;
+        border: 1px solid #c7d2da;
+        image-rendering: pixelated;
+        background: #fff;
+      }
+
+      .metrics {
+        margin-top: 10px;
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+        gap: 10px;
+        color: #22313f;
+      }
+
+      .metrics strong {
+        color: #1f2937;
+      }
+    </style>
+  </body>
+</html>
